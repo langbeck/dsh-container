@@ -27,17 +27,24 @@
 # registry, so the two images never drift apart and no registry round-trip is
 # needed. See BASE_IMAGE in docker/golang.dockerfile.
 
-name: build
+name: docker-build
 
 on:
   push:
-    branches: [main]
-    # Release tags only: a three-part version, optionally v-prefixed. This
-    # deliberately excludes pre-releases, because the semver tags below would
-    # otherwise collapse to nothing but :latest and a release candidate would
-    # move the :latest tag forward.
+    # Any branch or release tag reaches the job, and the job then decides
+    # whether to build. `paths` cannot be used here: under `push` it gates tag
+    # pushes as well as branch pushes, and a release must build even when its
+    # commit happens to touch no image input. The `tags` pattern still limits
+    # which tags trigger at all; the gate below only decides whether a branch
+    # push is worth building.
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    branches: ["**"]
   pull_request:
+    # A pull request is only ever validating the images, so it can be filtered
+    # here with no such conflict.
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker-build.yml"
   workflow_dispatch:
     inputs:
       # Named `publish` rather than `push`: `push` shadows the on.push event name,
@@ -60,8 +67,59 @@ env:
   IMAGE: ghcr.io/langbeck/dsh
 
 jobs:
+  # Decides whether the images need rebuilding, so branch pushes that touch no
+  # image input cost a few seconds instead of a full build. Tag pushes always
+  # proceed: a release must publish what its commit contains, and the commit
+  # may not touch docker/ at all. For a pull request the trigger's `paths`
+  # filter has already done this work, so it proceeds too.
+  changes:
+    name: decide whether to build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          # Only the changed paths are inspected, so history is not needed.
+          fetch-depth: 2
+
+      - name: Check for changes under docker/
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Pushes report the range in the event payload. A force-push or a
+          # brand-new branch reports an all-zero `before`, and a branch whose
+          # only commit has no parent cannot be diffed against HEAD^, so both
+          # fall back to the empty tree, which lists every file as added.
+          before='${{ github.event.before }}'
+          empty_tree=$(git hash-object -t tree /dev/null)
+          case "$before" in
+            ''|*0000000000000000000000000000000000000000*) base="$empty_tree" ;;
+            *) base="$before" ;;
+          esac
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base="$empty_tree"
+          fi
+          changed=$(git diff --name-only "$base" HEAD)
+          echo "Changed files:"
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(docker/|\.github/workflows/docker-build\.yml$)'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "No image inputs changed; skipping the build."
+          fi
+
   build:
     name: build and push images
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -176,8 +234,13 @@ jobs:
           # with an `outputs` list -- one would silently replace the other and
           # :base would never reach GHCR. The registry exporter is therefore
           # listed alongside the oci exporter instead of using `push`.
+          #
+          # `tar=false` is required: the oci exporter's `tar` option defaults to
+          # true, which writes a tarball AT the dest path rather than unpacking
+          # an OCI layout there. An oci-layout:// context then fails with
+          # `stat .../blobs/sha256/<digest>: not a directory`.
           outputs: |
-            type=oci,dest=${{ runner.temp }}/base-oci
+            type=oci,dest=${{ runner.temp }}/base-oci,tar=false
             ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.publish == true) && 'type=registry' || '' }}
           labels: ${{ steps.meta.outputs.labels }}
 
