@@ -4,7 +4,18 @@
 #
 # Published as ghcr.io/langbeck/dsh:base.
 
-FROM ubuntu:26.04
+# The Ubuntu base, overridable so an exact digest can be pinned without editing
+# this file: --build-arg UBUNTU_IMAGE=ubuntu@sha256:<digest>. Left as a mutable
+# tag by default, since a digest would also freeze out security updates.
+ARG UBUNTU_IMAGE=ubuntu:26.04
+FROM ${UBUNTU_IMAGE}
+
+# Re-declared after FROM, where build args actually become visible to RUN.
+ARG UBUNTU_IMAGE
+
+# Ubuntu release name, recorded so the built image can be traced back to a base
+# without consulting the build log.
+ENV DSH_UBUNTU_IMAGE=${UBUNTU_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -46,13 +57,22 @@ ENV PATH="$NVM_DIR/versions/node/v$NODE_VERSION/bin:$PATH"
 # Update npm
 RUN npm install -g npm@${NPM_VERSION}
 
-# Install DSH
+# Install DSH. Pinned exactly: npm's `latest` dist-tag currently points at an
+# older release than `next`, so an unpinned install would silently build a
+# different harness than the version named here.
+ARG DSH_VERSION=0.2.2-rc.2
 RUN npm config set allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs --location=user
-RUN npm install -g @deepseek-ai/dsh
+RUN npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+    && dsh --version
 
-# Use corepack to cleanly enable and lock down pnpm
+# Use corepack to cleanly enable and lock down pnpm. The version is explicit
+# because a bare `pnpm` resolves from corepack's bundled known-good table, whose
+# contents depend on COREPACK_VERSION and cannot be read off this file.
+ARG PNPM_VERSION=12.18.0
 RUN npm install -g corepack@${COREPACK_VERSION}
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-RUN corepack enable && corepack install --global pnpm
+RUN corepack enable \
+    && corepack install --global pnpm@${PNPM_VERSION} \
+    && pnpm --version
 
 ENTRYPOINT ["dsh"]

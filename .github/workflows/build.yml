@@ -69,15 +69,54 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      # DSH is installed from npm without a version pin, so every build
-      # resolves whatever the registry serves. Log the versions this run
-      # actually used to make a surprising image explainable later.
-      - name: Log upstream tool versions
+      # The pins live in docker/versions.env; the Dockerfiles carry identical ARG
+      # defaults for a bare `podman build`. Read them into the build-args below so
+      # CI uses the same source of truth as `just docker::build` and the two
+      # cannot drift. `set -a` exports every assignment, and blank/comment lines
+      # are skipped rather than becoming `--build-arg =`.
+      - name: Read pinned versions
+        id: versions
         run: |
-          echo "just version:  $(grep -m1 '^ARG JUST_VERSION=' docker/base.dockerfile | cut -d= -f2)"
-          echo "node version:  $(grep -m1 '^ARG NODE_VERSION=' docker/base.dockerfile | cut -d= -f2)"
-          echo "go version:    $(grep -m1 '^ARG GO_VERSION=' docker/golang.dockerfile | cut -d= -f2)"
-          echo "gopls version: $(grep -m1 '^ARG GOPLS_VERSION=' docker/golang.dockerfile | cut -d= -f2)"
+          set -a
+          . docker/versions.env
+          set +a
+          args=""
+          while IFS= read -r line; do
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            args="$args$line"$'\n'
+          done < docker/versions.env
+          printf 'build-args=%s\n' "$args" >> "$GITHUB_OUTPUT"
+          echo "Pinned versions from docker/versions.env:"
+          echo "$args"
+
+      # CI builds with buildx, not with `just docker::build`, so it cannot use
+      # podman's --build-arg-file. It reads versions.env itself, and the
+      # Dockerfiles carry ARG defaults as the contract for anything that cannot
+      # pass build args. Fail early if the file and those defaults disagree:
+      # otherwise editing versions.env would change local builds only.
+      - name: Check the Dockerfile defaults match versions.env
+        run: |
+          status=0
+          while IFS= read -r line; do
+            case "$line" in
+              ''|'#'*) continue ;;
+            esac
+            name=${line%%=*}
+            want=${line#*=}
+            # Last ARG <name>=... across the Dockerfiles; that is the default a
+            # build without --build-arg would use.
+            got=$(grep -horE "^ARG ${name}=.*" docker/*.dockerfile \
+                  | tail -n1 | cut -d= -f2-)
+            if [ "$got" != "$want" ]; then
+              echo "::error file=docker/versions.env::$name is '$want' here but '$got' in the Dockerfile ARG default"
+              status=1
+            else
+              echo "ok: $name=$want"
+            fi
+          done < docker/versions.env
+          exit $status
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -122,6 +161,7 @@ jobs:
             ${{ env.IMAGE }}:base
             ${{ steps.meta.outputs.tags }}
           push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.push }}
+          build-args: ${{ steps.versions.outputs.build-args }}
           # Load into the local image store whether or not this run pushes, so
           # the Go build below can use it as its FROM parent.
           load: true
@@ -137,6 +177,7 @@ jobs:
           platforms: linux/amd64
           build-args: |
             BASE_IMAGE=${{ env.IMAGE }}:base
+            ${{ steps.versions.outputs.build-args }}
           tags: |
             ${{ env.IMAGE }}:golang
             ${{ steps.meta.outputs.tags }}
