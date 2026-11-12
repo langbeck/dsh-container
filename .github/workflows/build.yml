@@ -1,0 +1,130 @@
+# Build the DSH sandbox images and push them to Docker Hub as langbeck/dsh.
+#
+# Pushes are limited to release tags so the tags consumers pin against only
+# move when a release is cut, not on every commit. Pushes to main and pull
+# requests build both images without pushing, which catches a broken Dockerfile
+# before it reaches a tag.
+#
+#   push tag v1.2.3  -> langbeck/dsh:base, :golang, :v1.2.3, :1.2.3, :1.2,
+#                       :latest
+#   push to main     -> build only, no tag, no push
+#   pull request     -> build only, no tag, no push
+#   manual dispatch  -> build only, no tag, no push; set `push` to publish the
+#                       images under the release tags of the dispatched ref,
+#                       which is how a failed release is retried
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  Docker Hub account that owns the langbeck namespace
+#   DOCKERHUB_TOKEN     Docker Hub access token with read/write scope
+#
+# The Go image is built FROM langbeck/dsh:base, so the base image is always
+# built and pushed first and the Go image on top of it, matching the order in
+# docker/build.just.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+    # Release tags only: a three-part version, optionally v-prefixed. This
+    # deliberately excludes pre-releases, because the semver tags below would
+    # otherwise collapse to nothing but :latest and a release candidate would
+    # move the :latest tag forward.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      push:
+        description: Push the built images to Docker Hub
+        type: boolean
+        default: false
+
+# A newer run for the same ref supersedes an older one, except for tags: two
+# releases must not cancel each other's push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # Same defaults as docker/images.just; the justfile and this workflow must
+  # agree or a local build would not reproduce the published image.
+  IMAGE: langbeck/dsh
+
+jobs:
+  build:
+    name: build and push images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      # DSH is installed from npm without a version pin, so every build
+      # resolves whatever the registry serves. Log the versions this run
+      # actually used to make a surprising image explainable later.
+      - name: Log upstream tool versions
+        run: |
+          echo "just version:  $(grep -m1 '^ARG JUST_VERSION=' docker/base.dockerfile | cut -d= -f2)"
+          echo "node version:  $(grep -m1 '^ARG NODE_VERSION=' docker/base.dockerfile | cut -d= -f2)"
+          echo "go version:    $(grep -m1 '^ARG GO_VERSION=' docker/golang.dockerfile | cut -d= -f2)"
+          echo "gopls version: $(grep -m1 '^ARG GOPLS_VERSION=' docker/golang.dockerfile | cut -d= -f2)"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.push
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # v1.2.3 -> :v1.2.3, :1.2.3, :1.2, :latest. The semver patterns emit
+      # nothing when the ref is not a release tag. `type=raw` is never gated by
+      # the ref, so :latest needs an explicit `enable`; without it every main
+      # and pull request build would be tagged, and the base image below would
+      # be relabelled as an unreleased version.
+      - name: Derive release tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern=v{{version}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      # The base image carries its own stable :base tag plus the release tags,
+      # so it can be pinned like the Go image instead of only by mutable tag.
+      - name: Build and push the base image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          file: docker/base.dockerfile
+          # amd64 only: golang.dockerfile downloads a TARGETARCH-specific Go
+          # toolchain and installs gopls per-architecture, so a multi-arch
+          # build needs an explicit platform proving pass first.
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:base
+            ${{ steps.meta.outputs.tags }}
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.push }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      # FROM langbeck/dsh:base resolves to the image pushed in the step above.
+      # Keep the tag in step with BASE_TAG in docker/images.just.
+      - name: Build and push the Go image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker
+          file: docker/golang.dockerfile
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:golang
+            ${{ steps.meta.outputs.tags }}
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.push }}
+          labels: ${{ steps.meta.outputs.labels }}
