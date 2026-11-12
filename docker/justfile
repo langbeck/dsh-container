@@ -27,7 +27,12 @@ mod build
 # Absolute path of the project root on the host, symlinks resolved. The
 # container mounts it at the very same path, so absolute paths in plugins,
 # settings, and sessions stay valid on both sides.
-project_root := canonicalize(justfile_directory() + "/..")
+#
+# module_directory() is the directory of this file, which is what ".../.." must
+# be relative to. justfile_directory() would return the root justfile's
+# directory when this file is invoked as the `docker` module from the repo root,
+# making the container mount the wrong tree.
+project_root := canonicalize(module_directory() + "/..")
 
 # Your real host DSH home, bind-mounted at the container's ~/.dsh. The image
 # runs as root, so that target is /root/.dsh; `idmap` carries ownership through
