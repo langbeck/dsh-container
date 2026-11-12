@@ -1,9 +1,13 @@
 # DSH image with the Go toolchain and gopls, built on the base image.
 #
 # Build base.dockerfile first, then this file.
-# Published as langbeck/dsh:golang.
+# Published as ghcr.io/langbeck/dsh:golang.
 
-FROM langbeck/dsh:base
+# BASE_IMAGE is a build argument rather than a literal so the image can be built
+# on the locally-built base instead of pulling one back from the registry. CI
+# passes the tag it just built; the default names the published base image.
+ARG BASE_IMAGE=ghcr.io/langbeck/dsh:base
+FROM ${BASE_IMAGE}
 
 # Go toolchain. gopls v0.24.0 declares `go 1.27.0`, so the distro's Go package
 # is too old to build it; install the official toolchain instead.

@@ -2,7 +2,7 @@
 # language-specific toolchain. Language images (e.g. golang.dockerfile) build
 # on top of this one.
 #
-# Published as langbeck/dsh:base.
+# Published as ghcr.io/langbeck/dsh:base.
 
 FROM ubuntu:26.04
 

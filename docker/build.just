@@ -16,4 +16,7 @@ base:
 
 # Build the Go image on top of the base.
 golang: base
-    podman build --file golang.dockerfile --tag {{image}}:{{tag}} .
+    # BASE_IMAGE is passed explicitly rather than left to the Dockerfile default,
+    # so the Go image sits on the base this justfile just built instead of
+    # pulling a stale one from the registry.
+    podman build --file golang.dockerfile --build-arg BASE_IMAGE={{base_image}} --tag {{image}}:{{tag}} .
