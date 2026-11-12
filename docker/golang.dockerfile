@@ -3,9 +3,14 @@
 # Build base.dockerfile first, then this file.
 # Published as ghcr.io/langbeck/dsh:golang.
 
-# BASE_IMAGE is a build argument rather than a literal so the image can be built
-# on the locally-built base instead of pulling one back from the registry. CI
-# passes the tag it just built; the default names the published base image.
+# BASE_IMAGE names the base stage. It is an argument rather than a literal so a
+# caller can point it at a base that was never published, by passing a named
+# build context and selecting it here:
+#   docker buildx build --build-context base=oci-layout:///path/to/layout@sha256:... \
+#       --build-arg BASE_IMAGE=base ...
+# A named context is resolved locally, so the Go image can be built on the base
+# from the same run with no registry round-trip. Without one, this falls back to
+# pulling the published tag.
 ARG BASE_IMAGE=ghcr.io/langbeck/dsh:base
 FROM ${BASE_IMAGE}
 

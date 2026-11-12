@@ -152,6 +152,7 @@ jobs:
       # The base image carries its own stable :base tag plus the release tags,
       # so it can be pinned like the Go image instead of only by mutable tag.
       - name: Build and push the base image
+        id: base
         uses: docker/build-push-action@v6
         with:
           context: docker
@@ -163,23 +164,38 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:base
             ${{ steps.meta.outputs.tags }}
-          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.publish == true }}
           build-args: ${{ steps.versions.outputs.build-args }}
-          # Load into the local image store whether or not this run pushes, so
-          # the Go build below can use it as its FROM parent.
-          load: true
+          # Always export the base to a local OCI layout so the Go build can
+          # consume it as a named build context. This is what makes a build-only
+          # run work: the base need not be published, and GHCR is never asked
+          # for it. An OCI layout is used rather than `load: true` because the
+          # docker-container driver keeps its own image store, so whether a
+          # docker-image:// context can see a loaded image is not dependable.
+          #
+          # `push` is shorthand for `-o type=registry`, so it cannot be combined
+          # with an `outputs` list -- one would silently replace the other and
+          # :base would never reach GHCR. The registry exporter is therefore
+          # listed alongside the oci exporter instead of using `push`.
+          outputs: |
+            type=oci,dest=${{ runner.temp }}/base-oci
+            ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') || inputs.publish == true) && 'type=registry' || '' }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # Built on the base from the step above, by name, rather than on
-      # whatever :base the registry currently serves.
+      # Built on the base exported by the step above, passed as a named build
+      # context rather than pulled from the registry. On a run that does not
+      # push, :base does not exist in GHCR at all, and asking for it fails with
+      # 403 from the token endpoint rather than a 404. The oci-layout context
+      # needs no registry.
       - name: Build and push the Go image
         uses: docker/build-push-action@v6
         with:
           context: docker
           file: docker/golang.dockerfile
           platforms: linux/amd64
+          build-contexts: |
+            base=oci-layout://${{ runner.temp }}/base-oci@${{ steps.base.outputs.digest }}
           build-args: |
-            BASE_IMAGE=${{ env.IMAGE }}:base
+            BASE_IMAGE=base
             ${{ steps.versions.outputs.build-args }}
           tags: |
             ${{ env.IMAGE }}:golang

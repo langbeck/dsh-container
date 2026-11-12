@@ -20,9 +20,9 @@ default: base golang
 base:
     podman build --file base.dockerfile --build-arg-file {{build_arg_file}} --tag {{image}}:{{base_tag}} .
 
-# BASE_IMAGE is passed explicitly rather than left to the Dockerfile default, so
-# the Go image sits on the base this justfile just built rather than a stale one
-# from the registry.
+# BASE_IMAGE is passed explicitly so the Go image sits on the base this justfile
+# just built. podman resolves the reference from its own image store, so nothing
+# is pulled; the name matches the :base tag set by the recipe above.
 #
 # Build the Go image on top of the base.
 golang: base
