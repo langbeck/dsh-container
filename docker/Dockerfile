@@ -1,18 +1,18 @@
-# DSH images, as one file with two stages.
+# The DSH image, as one file with two stages.
 #
 #   base    the harness plus the tools every session needs, no language
-#           toolchain. Published as ghcr.io/langbeck/dsh.
-#   golang  the base plus the Go toolchain and gopls. Published as
-#           ghcr.io/langbeck/dsh-golang.
+#           toolchain. Not published.
+#   golang  the base plus the Go toolchain and gopls. This is what is published,
+#           as ghcr.io/langbeck/dsh.
 #
-# One file because the second image is built FROM the first. Declaring that as
-# a stage keeps the dependency inside a single build: a `--target golang` build
-# always uses the base from the same source, so the two images cannot drift and
-# nothing has to be published before the other can be built. Selecting a stage
-# and naming the output image is the caller's job:
+# The published image is built FROM the base in the same file, so a
+# `--target golang` build always uses the base from the same source revision
+# rather than one fetched from a registry. Keeping `base` a named stage is also
+# what lets the harness be built and tested on its own. Selecting a stage and
+# naming the output is the caller's job:
 #
-#   docker build --target base   --tag ghcr.io/langbeck/dsh .
-#   docker build --target golang --tag ghcr.io/langbeck/dsh-golang .
+#   docker build --target base   --tag dsh-base .
+#   docker build --target golang --tag ghcr.io/langbeck/dsh:latest .
 
 # The Ubuntu base, overridable so an exact digest can be pinned without editing
 # this file: --build-arg UBUNTU_IMAGE=ubuntu@sha256:<digest>. Left as a mutable

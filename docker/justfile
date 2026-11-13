@@ -1,10 +1,9 @@
-# Container image tasks for the DSH sandbox images. Dockerfile holds both: the
-# `base` stage is the harness alone, and the `golang` stage adds the Go
-# toolchain on top of it.
+# Container image tasks for the DSH sandbox image. Dockerfile holds two stages:
+# `base` is the harness alone, and `golang` adds the Go toolchain on top of it.
+# Only the golang stage is published, as ghcr.io/langbeck/dsh.
 #
-#   just build          build both images
-#   just build base     build only the base image
-#   just build golang   build the Go image (which includes the base)
+#   just build          build the published image (the golang stage)
+#   just build base     build the harness alone, unpublished
 #   just web            serve the Web UI: `dsh --profile web --no-open`, bound
 #                       to HOST:PORT inside the container and published only
 #                       on PUBLISH_HOST (defaults: HOST=auto, PUBLISH_HOST=
@@ -13,7 +12,7 @@
 #   just bash [args...] open a shell in the same container instead of running dsh
 #
 # From the repository root these are `just docker::build` and
-# `just docker::build::golang`: build is a module, so its recipes are selected
+# `just docker::build::base`: build is a module, so its recipes are selected
 # with `::` rather than as arguments.
 
 set shell := ["bash", "-uc"]
@@ -77,7 +76,7 @@ web:
         --volume "{{project_root}}:{{project_root}}:idmap" \
         --volume "{{dsh_home}}:/root/.dsh:idmap" \
         --entrypoint /bin/bash \
-        {{golang_image}}:{{tag}} \
+        {{image}}:{{tag}} \
         -c 'host="{{host}}"; if [ "$host" = auto ]; then host=$(hostname -I 2>/dev/null | tr " " "\n" | grep -v "^127\." | grep -m1 -E "^([0-9]{1,3}\.){3}[0-9]{1,3}$"); fi; if [ -z "$host" ] && command -v ip >/dev/null 2>&1; then host=$(ip -4 -o addr show scope global | awk "{print \$4}" | cut -d/ -f1 | grep -m1 -E "^([0-9]{1,3}\.){3}[0-9]{1,3}$"); fi; if [ -z "$host" ]; then echo "error: could not determine the container IPv4; set HOST=<ip> to override" >&2; exit 1; fi; echo "web: http://{{publish_host}}:{{port}} (bound to $host:{{port}} inside {{network}})"; exec npx @deepseek-ai/dsh --profile web --no-open --host "$host" --port "{{port}}"'
 
 # Run the image, passing any arguments through to dsh (which requires a profile).
@@ -90,7 +89,7 @@ run *args:
         --workdir "{{project_root}}" \
         --volume "{{project_root}}:{{project_root}}:idmap" \
         --volume "{{dsh_home}}:/root/.dsh:idmap" \
-        {{golang_image}}:{{tag}} "$@"
+        {{image}}:{{tag}} "$@"
 
 # Open an interactive bash shell in the container instead of running dsh.
 bash *args:
@@ -99,4 +98,4 @@ bash *args:
         --workdir "{{project_root}}" \
         --volume "{{project_root}}:{{project_root}}:idmap" \
         --volume "{{dsh_home}}:/root/.dsh:idmap" \
-        {{golang_image}}:{{tag}} "$@"
+        {{image}}:{{tag}} "$@"

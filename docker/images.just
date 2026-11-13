@@ -1,17 +1,15 @@
-# Image names shared by this justfile and the build module. A module has its own
-# variable scope, so both files import this one. Override with the IMAGE,
-# GOLANG_IMAGE, BASE_TAG, and TAG environment variables, e.g.
-# `IMAGE=my-dsh TAG=dev just build`.
+# Image name and tags shared by this justfile and the build module. A module has
+# its own variable scope, so both files import this one. Override with the IMAGE,
+# BASE_TAG, and TAG environment variables, e.g. `IMAGE=my-dsh TAG=dev just build`.
 #
-# Both defaults name the published repositories, so a local build produces
-# exactly what CI publishes and `just run`/`just web` exercise the same
-# reference users pull.
+# The default names the published image, so a local build produces exactly what
+# CI publishes and `just run`/`just web` exercise the same reference users pull.
 image := env_var_or_default("IMAGE", "ghcr.io/langbeck/dsh")
-golang_image := env_var_or_default("GOLANG_IMAGE", "ghcr.io/langbeck/dsh-golang")
 
-# Each image lives in its own repository, so the tag names carry no
-# base/golang distinction; `latest` is what a plain pull resolves to.
-base_tag := env_var_or_default("BASE_TAG", "latest")
+# Only one image is published, so `latest` is what a plain pull resolves to.
+# BASE_TAG names the tag the base-only recipe uses; the base is not published,
+# so its tag only ever exists locally.
+base_tag := env_var_or_default("BASE_TAG", "base")
 tag := env_var_or_default("TAG", "latest")
 
 # Versions pinned in versions.env, handed to podman as-is. podman's
