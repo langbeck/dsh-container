@@ -172,10 +172,14 @@ jobs:
             esac
             name=${line%%=*}
             want=${line#*=}
-            # Last ARG <name>=... across the Dockerfiles; that is the default a
-            # build without --build-arg would use.
-            got=$(grep -horE "^ARG ${name}=.*" docker/*.dockerfile \
-                  | tail -n1 | cut -d= -f2-)
+            # The default a build without --build-arg would use. Every version
+            # is declared exactly once, in the stage that uses it.
+            if ! matches=$(grep -hE "^ARG ${name}=" docker/Dockerfile); then
+              echo "::error file=docker/versions.env::$name is not declared as an ARG in docker/Dockerfile"
+              status=1
+              continue
+            fi
+            got=$(printf '%s\n' "$matches" | tail -n1 | cut -d= -f2-)
             if [ "$got" != "$want" ]; then
               echo "::error file=docker/versions.env::$name is '$want' here but '$got' in the Dockerfile ARG default"
               status=1
