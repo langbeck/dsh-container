@@ -1,20 +1,31 @@
-# DSH base image: the harness plus the tools every session needs, with no
-# language-specific toolchain. Language images (e.g. golang.dockerfile) build
-# on top of this one.
+# DSH images, as one file with two stages.
 #
-# Published as ghcr.io/langbeck/dsh:base.
+#   base    the harness plus the tools every session needs, no language
+#           toolchain. Published as ghcr.io/langbeck/dsh.
+#   golang  the base plus the Go toolchain and gopls. Published as
+#           ghcr.io/langbeck/dsh-golang.
+#
+# One file because the second image is built FROM the first. Declaring that as
+# a stage keeps the dependency inside a single build: a `--target golang` build
+# always uses the base from the same source, so the two images cannot drift and
+# nothing has to be published before the other can be built. Selecting a stage
+# and naming the output image is the caller's job:
+#
+#   docker build --target base   --tag ghcr.io/langbeck/dsh .
+#   docker build --target golang --tag ghcr.io/langbeck/dsh-golang .
 
 # The Ubuntu base, overridable so an exact digest can be pinned without editing
 # this file: --build-arg UBUNTU_IMAGE=ubuntu@sha256:<digest>. Left as a mutable
 # tag by default, since a digest would also freeze out security updates.
 ARG UBUNTU_IMAGE=ubuntu:26.04
-FROM ${UBUNTU_IMAGE}
+
+FROM ${UBUNTU_IMAGE} AS base
 
 # Re-declared after FROM, where build args actually become visible to RUN.
 ARG UBUNTU_IMAGE
 
-# Ubuntu release name, recorded so the built image can be traced back to a base
-# without consulting the build log.
+# The base that was actually used, recorded so a built image can be traced back
+# to it without consulting the build log.
 ENV DSH_UBUNTU_IMAGE=${UBUNTU_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -76,3 +87,31 @@ RUN corepack enable \
     && pnpm --version
 
 ENTRYPOINT ["dsh"]
+
+
+FROM base AS golang
+
+# Every build argument used above has to be re-declared inside a stage that
+# needs it; only those the Go stage itself references are repeated here.
+
+# Go toolchain. gopls v0.24.0 declares `go 1.27.0`, so the distro's Go package
+# is too old to build it; install the official toolchain instead.
+ARG GO_VERSION=1.27.3
+ARG TARGETARCH=amd64
+RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
+    && tar -C /usr/local -xzf /tmp/go.tgz \
+    && rm /tmp/go.tgz
+
+ENV GOROOT=/usr/local/go
+ENV GOPATH=/root/go
+# Appended rather than prepended so the base stage's Node binaries keep
+# precedence.
+ENV PATH="$PATH:$GOROOT/bin:$GOPATH/bin"
+
+# gopls: the MCP server (`gopls mcp`) needs both `go` and the gopls binary on
+# PATH at runtime, since gopls shells out to the toolchain to load packages.
+ARG GOPLS_VERSION=v0.24.0
+RUN go install "golang.org/x/tools/gopls@${GOPLS_VERSION}" \
+    && go version \
+    && gopls version \
+    && go clean -cache -modcache
